@@ -1,0 +1,1 @@
+# Yukardan kurallara bak oralara kodları eklicez
