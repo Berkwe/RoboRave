@@ -269,74 +269,119 @@ void ApplicationFunctionSet::ApplicationFunctionSet_SensorDataUpdate(void)
 
 
 
-/*循迹*/
 
-void ApplicationFunctionSet::ApplicationFunctionSet_Tracking(void)
+
+void ApplicationFunctionSet::ApplicationFunctionSet_Tracking(bool isStop)
 {
-  static boolean timestamp = true;
-  static boolean BlindDetection = true;
-  static unsigned long MotorRL_time = 0;
-  if (Application_SmartRobotCarxxx0.Functional_Mode == TraceBased_mode)
-  {
-    if (Car_LeaveTheGround == false) //车子离开地面了？
-    {
+    static unsigned long lastTime = 0;
+    static float integral = 0;
+    static float prevError = 0;
+    static bool timestamp = true;
+    static bool blindDetection = true;
+    static unsigned long motorRL_time = 0;
+
+    if (isStop) {
       ApplicationFunctionSet_SmartRobotCarMotionControl(stop_it, 0);
       return;
     }
-    float getAnaloguexxx_L = AppITR20001.DeviceDriverSet_ITR20001_getAnaloguexxx_L();
-    float getAnaloguexxx_M = AppITR20001.DeviceDriverSet_ITR20001_getAnaloguexxx_M();
-    float getAnaloguexxx_R = AppITR20001.DeviceDriverSet_ITR20001_getAnaloguexxx_R();
-    
-    if (function_xxx(getAnaloguexxx_M, TrackingDetection_S, TrackingDetection_E))
+
+    if (Application_SmartRobotCarxxx0.Functional_Mode != TraceBased_mode)
+        return;
+
+    if (Application_FunctionSet.Car_LeaveTheGround == false) 
     {
-      /*控制左右电机转动：实现匀速直行*/
-      ApplicationFunctionSet_SmartRobotCarMotionControl(Forward, 100);
-      timestamp = true;
-      BlindDetection = true;
-    }
-    else if (function_xxx(getAnaloguexxx_R, TrackingDetection_S, TrackingDetection_E))
-    {
-      /*控制左右电机转动：前右*/
-      ApplicationFunctionSet_SmartRobotCarMotionControl(Right, 100);
-      timestamp = true;
-      BlindDetection = true;
-    }
-    else if (function_xxx(getAnaloguexxx_L, TrackingDetection_S, TrackingDetection_E))
-    {
-      /*控制左右电机转动：前左*/
-      ApplicationFunctionSet_SmartRobotCarMotionControl(Left, 100);
-      timestamp = true;
-      BlindDetection = true;
-    }
-    else //不在黑线上的时候。。。
-    {
-      if (timestamp == true) //获取时间戳 timestamp
-      {
-        timestamp = false;
-        MotorRL_time = millis();
         ApplicationFunctionSet_SmartRobotCarMotionControl(stop_it, 0);
-      }
-      unsigned long m=millis();
-      /*Blind Detection*/
-      if ((function_xxx((m - MotorRL_time), 0, 200) || function_xxx((m - MotorRL_time), 1600, 2000)) && BlindDetection == true)
-      {
-        ApplicationFunctionSet_SmartRobotCarMotionControl(Right, 100);
-      }
-      else if (((function_xxx((m - MotorRL_time), 200, 1600))) && BlindDetection == true)
-      {
-        ApplicationFunctionSet_SmartRobotCarMotionControl(Left, 100);
-      }
-      else if ((function_xxx((m - MotorRL_time), 3000, 3500))) // Blind Detection ...s ?
-      {
-        BlindDetection = false;
-        ApplicationFunctionSet_SmartRobotCarMotionControl(stop_it, 0);
-      }
+        return;
     }
-  }
-  else if (false == timestamp)
-  {
-    BlindDetection = true;
-    timestamp = true;
-    MotorRL_time = 0;
-  }
+
+    float sensor_L = AppITR20001.DeviceDriverSet_ITR20001_getAnaloguexxx_L();
+    float sensor_M = AppITR20001.DeviceDriverSet_ITR20001_getAnaloguexxx_M();
+    float sensor_R = AppITR20001.DeviceDriverSet_ITR20001_getAnaloguexxx_R();
+    Serial.println("\nsol : ");
+    Serial.print(sensor_L);
+    Serial.println("\norta : ");
+    Serial.print(sensor_M);    
+    Serial.println("\nsağ : ");
+    Serial.print(sensor_R);
+
+    float error = 0;
+    if (function_xxx(sensor_M, TrackingDetection_S, TrackingDetection_E))
+    {
+        error = 0; // orta çizgi üzerindeyiz
+    }
+    else if (function_xxx(sensor_R, TrackingDetection_S, TrackingDetection_E))
+    {
+        error = 1.0; // sağa sapma
+    }
+    else if (function_xxx(sensor_L, TrackingDetection_S, TrackingDetection_E))
+    {
+        error = -1.0; // sola sapma
+    }
+    else // çizgiyi kaybettik
+    {
+        error = prevError; // son hatayı koru
+    }
+
+    // Zaman farkı
+    unsigned long currentTime = millis();
+    float dt = (currentTime - lastTime) / 1000.0;
+    if (dt <= 0) dt = 0.001; // sıfır bölmeye karşı
+    lastTime = currentTime;
+
+    // PID terimleri
+    integral += error * dt;                       // Integral
+    float derivative = (error - prevError) / dt;  // Türev
+    prevError = error;
+
+    // PID parametreleri (deneme ile ayarlanmalı)
+    float Kp = 120.0;
+    float Ki = 0.0;
+    float Kd = 60.0;
+    int baseSpeed = 100;  // Motor temel hızı
+    int UpperLimit = 255;
+
+    // Motor hızını PID ile ayarla
+    int speedCorrection = Kp * error + Ki * integral + Kd * derivative;
+    int leftSpeed = baseSpeed - speedCorrection;
+    int rightSpeed = baseSpeed + speedCorrection;
+
+    leftSpeed = constrain(leftSpeed, 0, UpperLimit);
+    rightSpeed = constrain(rightSpeed, 0, UpperLimit);
+
+    // Motor kontrolü
+    ApplicationFunctionSet_SmartRobotCarMotionControl(Forward, 0); // yön sabit Forward
+    AppMotor.DeviceDriverSet_Motor_control(direction_just, rightSpeed, direction_just, leftSpeed, control_enable);
+
+    // Blind detection ve stop mekanizması
+    if (!function_xxx(sensor_L, TrackingDetection_S, TrackingDetection_E) &&
+        !function_xxx(sensor_M, TrackingDetection_S, TrackingDetection_E) &&
+        !function_xxx(sensor_R, TrackingDetection_S, TrackingDetection_E))
+    {
+        if (timestamp)
+        {
+            timestamp = false;
+            motorRL_time = millis();
+            ApplicationFunctionSet_SmartRobotCarMotionControl(stop_it, 0);
+        }
+
+        unsigned long m = millis();
+        if ((function_xxx((m - motorRL_time), 0, 200) || function_xxx((m - motorRL_time), 1600, 2000)) && blindDetection)
+        {
+            ApplicationFunctionSet_SmartRobotCarMotionControl(Right, 100);
+        }
+        else if ((function_xxx((m - motorRL_time), 200, 1600)) && blindDetection)
+        {
+            ApplicationFunctionSet_SmartRobotCarMotionControl(Left, 100);
+        }
+        else if ((function_xxx((m - motorRL_time), 3000, 3500)))
+        {
+            blindDetection = false;
+            ApplicationFunctionSet_SmartRobotCarMotionControl(stop_it, 0);
+        }
+    }
+    else
+    {
+        timestamp = true;
+        blindDetection = true;
+    }
 }

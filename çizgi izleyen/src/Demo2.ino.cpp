@@ -1,21 +1,26 @@
+# 1 "C:\\Users\\durgu\\AppData\\Local\\Temp\\tmps4bmj45r"
+#include <Arduino.h>
+# 1 "C:/Users/durgu/Desktop/myProjects/çizgi izleyen/cizgi izleyen/src/Demo2.ino"
 #include <avr/wdt.h>
 #include "DeviceDriverSet_xxx0.h"
 #include "ApplicationFunctionSet_xxx0.h"
-#include <Servo.h> 
+#include <Servo.h>
 
-Servo myServo; 
-const int trigPin = 13; // trig
-const int echoPin = 12; // echo
+Servo myServo;
+const int trigPin = 13;
+const int echoPin = 12;
 bool isStop = false;
-
-
+void setup();
+long readUltrasonicDistance();
+void loop();
+#line 12 "C:/Users/durgu/Desktop/myProjects/çizgi izleyen/cizgi izleyen/src/Demo2.ino"
 void setup()
 {
 
   Application_FunctionSet.ApplicationFunctionSet_Init();
 
   myServo.attach(10);
-  myServo.write(90); 
+  myServo.write(90);
 
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
@@ -24,8 +29,8 @@ void setup()
 }
 
 
-int TrackingDetection_S = 300; // alt siyah
-int TrackingDetection_E = 400; // üst beyaz
+int TrackingDetection_S = 300;
+int TrackingDetection_E = 400;
 
 long readUltrasonicDistance() {
     digitalWrite(trigPin, LOW);
@@ -54,10 +59,10 @@ void loop() {
     delay(20);
 
     if (isStop) delay(700);
-  
+
     if (Serial.available() > 0) {
         String input = Serial.readStringUntil('\n');
-        input.trim(); 
+        input.trim();
         int spaceIndex = input.indexOf(' ');
         if (spaceIndex > 0) {
             int newS = input.substring(0, spaceIndex).toInt();

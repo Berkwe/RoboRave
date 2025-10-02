@@ -15,7 +15,7 @@ class ApplicationFunctionSet
 {
 public:
   void ApplicationFunctionSet_Init(void);
-  void ApplicationFunctionSet_Tracking(void);           //循迹
+  void ApplicationFunctionSet_Tracking(bool isStop);           //循迹
   void ApplicationFunctionSet_SensorDataUpdate(void);   //传感器数据更新
   void ApplicationFunctionSet_SerialPortDataAnalysis(void);
   
