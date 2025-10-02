@@ -1,0 +1,13 @@
+[env:uno]
+platform = atmelavr
+board = uno
+framework = arduino
+monitor_speed = 9600
+
+
+lib_deps =
+    Wire            ; I2C kütüphanesi
+    MsTimer2        ; Timer kütüphanesi
+    MPU6050         ; MPU6050 sensör kütüphanesi (I2C tabanlı)
+
+src_filter = +<*.ino> +<*.cpp> +<*.h>
