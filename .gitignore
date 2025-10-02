@@ -3,5 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch/
-roborave/
-Çizgi izleyen/ELEGOO Smart Robot Car Kit V4.0 2023.02.01/
+çizgi izleyen/carkit/
+.vscode/
+.continue/
+çizgi izleyen/2024_linefollowing_de tr.pdf
