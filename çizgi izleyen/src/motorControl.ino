@@ -1,8 +1,13 @@
 #include <Arduino.h>
 #include <FastLED.h>
+#include <Servo.h>
 
 
+Servo myServo;
 
+#define PIN_trig 13 // trig mesafe sensoru
+#define PIN_echo 12 // echo mesafe sensoru
+#define PIN_servo 10 // servo pini
 #define PIN_irLeft A2 // sol ir sensörü
 #define PIN_irMiddle A1 // orta ir sensörü
 #define PIN_irRight A0 //  sağ ir sensörü
@@ -31,17 +36,13 @@ CRGB yellow = CRGB(255,255,0); // çizgiye yerleştirin rengi
 CRGB black = CRGB(0,0,0); // led kapatma rengi
 
 
-
-#define speedMax 200 // en fazla hız
+#define speedMax 130 // en fazla hız
 #define minGroundDistance 950 // robotun havada varsayılması için gereken en düşük değer
 
-
 bool isReversedLines = false; // çizginin arka plandan daha açık olduğunu belirten flag
-int lineDetectionValue = 700; // (|arka_plan_değeri-çizgi_değeri|)/2 böylece dinamik doğru bi dğeer atanır
+int lineDetectionValue = 700; // (|arka_plan_değeri+çizgi_değeri|)/2 böylece dinamik doğru bi dğeer atanır
+bool isStop = false;
 
-unsigned long previousTime = 0; // delaySenc için
-
-bool ledState; // ledin durumu
 
 int buttonMode = 1; // mod değeri
 
@@ -56,25 +57,52 @@ float g_Kd = 12.0;
 float g_integral = 0;
 float g_previousError = 0;
 unsigned long g_lastPIDTime = 0;
-int g_baseSpeed = 100;
+int g_baseSpeed = 50;
 
 // Blind detection değişkenleri
 unsigned long g_blindStartTime = 0;
 bool g_blindActive = false;
 float g_lastError = 0;
 
-bool debug = false;
+// ultrasonik sensor için 
+unsigned long g_triggerTime = 0;
+bool g_waitingEcho = false;
+long g_lastDistance = 100;
 
+
+bool debug = false; 
 
 // Otomatik timer yönetimi için
 enum TimerID {
     TIMER_LED,
     TIMER_BUTTON,
     TIMER_LINE_DETECT,
+    TIMER_TURN,
+    TIMER_SERVO,
+    TIMER_ULTRASONIC,
     TIMER_COUNT  // Toplam timer sayısı
 };
-
 unsigned long g_timers[TIMER_COUNT] = {0};
+
+// yönler
+enum directions {
+    forward,       //(1)
+    backward,      //(2)
+    left,          //(3)
+    right,         //(4)
+    leftForward,   //(5)
+    leftBackward,  //(6)
+    rightForward,  //(7)
+    rightBackward, //(8)
+    stop_it
+};
+
+// modlar
+enum mods {
+    lineFollowing = 1,
+    calibrating = 2
+};
+
 
 bool delaySenc(TimerID id, int ms) {
     unsigned long currentTime = millis();
@@ -117,6 +145,7 @@ void controlCarGround() {
     if (sensorR > minGroundDistance && sensorM > minGroundDistance && sensorL > minGroundDistance) {
         isCarOnGround = false;
         if (buttonMode == 1 && isCalibrated) { // havada
+            isStop = false;
             digitalWrite(PIN_motorEN, 0); // motru kapat
             burnLed(cyan);
         }
@@ -131,6 +160,7 @@ void controlCarGround() {
     
 }
 
+
 void PinInit() {
     // motor initi
     pinMode(PIN_motorLeft, OUTPUT);
@@ -143,24 +173,12 @@ void PinInit() {
     FastLED.setBrightness(255);
     // button initi
     pinMode(PIN_button, INPUT_PULLUP);
+    // servo initi
+    myServo.attach(10);
+    // mesafe sensörü initi
+    pinMode(PIN_trig, OUTPUT);
+    pinMode(PIN_echo, INPUT);
 }
-
-enum directions {
-    forward,       //(1)
-    backward,      //(2)
-    left,          //(3)
-    right,         //(4)
-    leftForward,   //(5)
-    leftBackward,  //(6)
-    rightForward,  //(7)
-    rightBackward, //(8)
-    stop_it
-};
-
-enum mods {
-    lineFollowing = 1,
-    calibrating = 2
-};
 
 
 void goTo(directions direction, uint8_t speed = 0, uint8_t speedRight = 0, uint8_t speedLeft = 0) { // motoru hareket ettirir
@@ -221,6 +239,18 @@ void goTo(directions direction, uint8_t speed = 0, uint8_t speedRight = 0, uint8
         break;
     }
 
+}
+
+
+long readUltrasonicDistance() {
+    digitalWrite(PIN_trig, LOW);
+    delayMicroseconds(2);
+    digitalWrite(PIN_trig, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(PIN_trig, LOW);
+    long duration = pulseIn(PIN_echo, HIGH);
+    long distanceCm = duration * 0.034 / 2;
+    return distanceCm;
 }
 
 
@@ -361,8 +391,40 @@ void blindDetection() { // robot yönünü kaybettiğinde çalışır
     }
 }
 
+
+// --- Global değişkenler ---
+int g_lastTurnDir = 0; // 1 = sola, -1 = sağa, 0 = düz
+#define TURN_HISTORY_SIZE 50
+int g_turnHistory[TURN_HISTORY_SIZE];
+int g_turnIndex = 0;
+
+// --- Yardımcı fonksiyon ---
+void addTurnToHistory(int dir) {
+    if (dir == 0) return; // düzse kaydetmeye gerek yok
+    if (g_turnIndex < TURN_HISTORY_SIZE) {
+        g_turnHistory[g_turnIndex++] = dir;
+    } else {
+        // Dizi dolarsa en eskileri kaydır
+        for (int i = 1; i < TURN_HISTORY_SIZE; i++) {
+            g_turnHistory[i - 1] = g_turnHistory[i];
+        }
+        g_turnHistory[TURN_HISTORY_SIZE - 1] = dir;
+    }
+}
+
+// --- Listeyi yazdırmak için (debug) ---
+void printTurnHistory() {
+    Serial.print("Turn history: ");
+    for (int i = 0; i < g_turnIndex; i++) {
+        if (g_turnHistory[i] == 1) Serial.print("L ");
+        else if (g_turnHistory[i] == -1) Serial.print("R ");
+    }
+    Serial.println();
+}
+
+
 void followLine() { // çizgi takibi
-    if (!isCalibrated || !isCarOnGround) {
+    if (!isCalibrated || !isCarOnGround || isStop) {
         goTo(stop_it, 0);
         g_integral = 0;
         g_previousError = 0;
@@ -376,20 +438,20 @@ void followLine() { // çizgi takibi
     int sensorR = analogRead(PIN_irRight);
 
     
-    int left = !isReversedLines ? (sensorL < lineDetectionValue) : (sensorL >= lineDetectionValue);
-    int middle = !isReversedLines ? (sensorM < lineDetectionValue) : (sensorM >= lineDetectionValue);
-    int right = !isReversedLines ? (sensorR < lineDetectionValue) : (sensorR >= lineDetectionValue);
+    int Sleft = !isReversedLines ? (sensorL < lineDetectionValue) : (sensorL >= lineDetectionValue);
+    int Smiddle = !isReversedLines ? (sensorM < lineDetectionValue) : (sensorM >= lineDetectionValue);
+    int Sright = !isReversedLines ? (sensorR < lineDetectionValue) : (sensorR >= lineDetectionValue);
     
     if (debug) {
         Serial.print("SensorL: "); Serial.print(sensorL);
-        Serial.print("  Left: "); Serial.print(left);
+        Serial.print("  Left: "); Serial.print(Sleft);
         Serial.print(" | SensorM: "); Serial.print(sensorM);
-        Serial.print("  Middle: "); Serial.print(middle);
+        Serial.print("  Middle: "); Serial.print(Smiddle);
         Serial.print(" | SensorR: "); Serial.print(sensorR);
-        Serial.print("  Right: "); Serial.println(right);
+        Serial.print("  Right: "); Serial.println(Sright);
     }
     
-    if (!left && !middle && !right) {
+    if (!Sleft && !Smiddle && !Sright) {
         g_integral = 0;
         g_previousError = 0;
         g_lastPIDTime = 0;
@@ -406,8 +468,8 @@ void followLine() { // çizgi takibi
 
 
     // -1 sol 1 sağ
-    float totalWeight = left + middle + right;
-    float error = (-1.0 * left + 0 * middle + 1.0 * right) / totalWeight;
+    float totalWeight = Sleft + Smiddle + Sright;
+    float error = (-1.0 * Sleft + 0 * Smiddle + 1.0 * Sright) / totalWeight;
 
 
     unsigned long currentTime = millis();
@@ -461,6 +523,26 @@ void followLine() { // çizgi takibi
 
     goTo(forward, 0, leftSpeed, rightSpeed);
 
+   // Yön tespiti deneysel
+    int currentDir = 0;
+    if (error > 0.05) currentDir = -1; // sağa dönüyor
+    else if (error < -0.05) currentDir = 1; // sola dönüyor
+    else currentDir = 0; // düz
+
+    if (currentDir != g_lastTurnDir && currentDir != 0) {
+        addTurnToHistory(currentDir);
+        g_lastTurnDir = currentDir;
+
+        if (debug) {
+            Serial.print("Yeni dönüş eklendi: ");
+            if (currentDir == 1) Serial.println("Sol");
+            else if (currentDir == -1) Serial.println("Sağ");
+            printTurnHistory();
+        }
+    }
+    
+
+
 }   
 
 
@@ -468,21 +550,35 @@ void setup() {
     Serial.begin(9600);
     buttonMode = 1;
     PinInit();
+    myServo.write(0);
     if (debug) {
         burnLed(blue);
         delay(1500);
         burnLed(black);
+        isCalibrated = true;
+        isCarOnGround = true;
     }
 }
 
 
 void loop() {
     blinkLed(isCalibrated, red, 500);
+    
+    if (delaySenc(TIMER_ULTRASONIC, 70) && !isStop && isCarOnGround) {
+        if (readUltrasonicDistance() < 8 && isCalibrated) {
+                myServo.write(0);
+                isStop = true;
+            }
+
+    }
     controlCarGround();
 
-    // Mod seçimi
+    if (!isStop && isCarOnGround) {
+            myServo.write(90);
+    }
+    
     if (!digitalRead(PIN_button) && delaySenc(TIMER_BUTTON, 70)) { 
-        if (buttonMode < 2) buttonMode += 1; 
+        if (buttonMode < 2) buttonMode += 1;
         else buttonMode = 1;
     }
 
@@ -496,7 +592,7 @@ void loop() {
             buttonMode = 1;
             break;
     }
-    
+    if (delaySenc(TIMER_TURN, 1000) && debug)
+    printTurnHistory();
     
 }
-
