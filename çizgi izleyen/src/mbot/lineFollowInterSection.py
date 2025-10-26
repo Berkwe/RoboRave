@@ -1,4 +1,4 @@
-import event, time, cyberpi, mbot2, mbuild
+import event, time, cyberpi, mbot2, mbuild, sys
 
 # * pid parametreleri
 baseSpeed = 15
@@ -50,12 +50,12 @@ lastInterSectionTime = 0
 
 # * genel
 calibrateMode = 1 # ? kalibrasyona göre sensor modu, sensör ışıkları arka planda yanıyorsa 1 çizgide yanıyorsa 0 yap
-calibrateTime = 1
-isStop = True
-          
+isStop = True # ? robotun durmasını kotnrol eden flag
+currentCalibrateTreshold = 50 # ? siyah çizgi için eşik değeri  
 
 
 def Cprint(*message): 
+    """Konsole bişiler yazdırmanın kolay yolu"""
     message = list(message)
     message = map(str, message)
     strMessage = " ".join(message)
@@ -92,7 +92,7 @@ def getSensorValues(isOnlyMid = False, mode = 1):
         ]
 
 def limit_power(power):
-    """Motor gücünü -100 ile 100 arasında sınırla"""
+    """Motor gücünü -100 ile 100 arasında sınırlar"""
     return max(-100, min(100, power))
 
 def calculatePID(error, dt=1):
@@ -119,7 +119,7 @@ def driveMotors(left, right):
 
 
 def blindDetection():
-    """Çizgi kaybolduğunda önce 180° dön, bulunamazsa farklı bir arama patterni uygula."""
+    """Çizgi kaybolduğunda önce 180 derece döner bulamazsa hazır patterni uygular (yani kağıt üstünde öyle)"""
     global blindStartTime, currentStage
 
     currentTime = time.time()
@@ -141,6 +141,7 @@ def blindDetection():
 
 
 def reactionInterSections(ınterSectionPattern: str, pattern: int):
+    """Kavşaklara göre verilecek tepkiler"""
     global lastInterSectionTime
     if isStop:  
         return
@@ -162,34 +163,36 @@ def reactionInterSections(ınterSectionPattern: str, pattern: int):
 
 
 def controlInterSection():
+    """Kavşak kontrolü"""
     global lastInterSectionTime, isStop
     
-    if lastInterSectionTime != 0 and (time.time() - lastInterSectionTime) < interSectionCoolDown:
+    if lastInterSectionTime != 0 and (time.time() - lastInterSectionTime) < interSectionCoolDown: # ? kavşakdan dönerken sağ veya sol sensorler yanıp sönebilir onun için bekleme süresi
         return
     
     if isStop:
         return
     
-    SAMPLE_COUNT = 5
+    numSensorReads = 5 # ? sensörlerin kaç kere okunacağı. yükseltilirse robotun tepkileri yavaşlar
     sensorReadings = []
+    sleepTime = 0.005 # ? dikkatli ayarla uzun tutarsan numSensorReads*sleepTime dan çok fazla geçikme yaşanabilir. Kısa tutarsan zaten ortalama almanın anlamı kalmaz
     
-    for _ in range(SAMPLE_COUNT):
+    for _ in range(numSensorReads): # ? okumak için döngü 
         reading = getSensorValues(mode=calibrateMode)
         sensorReadings.append(reading)
-        time.sleep(0.005)
+        time.sleep(sleepTime)
     
     finalSensors = []
-    for sensorIndex in range(4):
-        values = [sensorReadings[i][sensorIndex] for i in range(SAMPLE_COUNT)]
-        trueCount = sum(values)
-        finalSensors.append(trueCount > SAMPLE_COUNT / 2)
+    for sensorIndex in range(4): # ? her döngüde bir sensorun ortalaması alınır
+        values = [sensorReadings[i][sensorIndex] for i in range(numSensorReads)] # ? okunan sensorleri o anki indexe göre listeden çeker ve yeni bir liste oluştırur
+        trueCount = sum(values) # ? değerlerin toplamını alıyor getSensorVlaues sensore göre 1 veya 0 döndürüyor. bu  yüzden toplamak mümkün 
+        finalSensors.append(trueCount > numSensorReads / 2) # ? eğer o anki sensorun toplam değeri okunanın yarısından büyükse true eklenir yani sensor çizgi üstündedir değilse false eklenir yani arka plandadır
     
-    active_count = sum(finalSensors)
+    active_count = sum(finalSensors) 
     
-    if active_count < 3:
+    if active_count < 3: # ? aktif sensör hesabı 3 den küçükse çalışmaz (iki ortanın ve (sağ veya sol) un aktifliğini bekler kısaca)
         return
     
-    isT = active_count == 4
+    isT = active_count == 4 # ? T kavşak kontrolü gerisini de anla artık
     isRight = (finalSensors[1] or finalSensors[2]) and finalSensors[3] and not finalSensors[0]
     isLeft = (finalSensors[1] or finalSensors[2]) and finalSensors[0] and not finalSensors[3]
     
@@ -298,19 +301,6 @@ def line_follow():
 
 
 
-def sensor_test_mode():
-    """Sensör test modu"""
-    Cprint("Sensör Test Modu")
-    while True:
-        sensors = getSensorValues(mode=calibrateMode)
-        Cprint(
-            "R1:", sensors[0],
-            "R2:", sensors[1],
-            "R3:", sensors[2],
-            "R4:", sensors[3]
-        )
-        time.sleep(0.2)
-
 def controlStages():
     """bölüm kontrolü"""
     global currentStage
@@ -338,9 +328,22 @@ def main():
             
             time.sleep(mainLoopDelay)
     except Exception as e:
-        Cprint("Ana döngüde hata : " + str(e))
+        Cprint("Ana döngüde hata : \n")
+        sys.print_exception(e)
         stop_robot()
     
+
+def calibrateThreshold(threshold = 50):
+    try:
+        mbuild.quad_rgb_sensor.set_custom_color(
+            r=0,
+            g=0,
+            b=0,
+            tolerance=threshold
+        )
+    except Exception as e:
+        sys.print_exception(e)
+
 def stop_robot():
     global prevError, integral, ifFirstDirection, lastInterSectionTime, isStop, blindTimes, isBlind, blindStartTime, goDirectionStartTime
     isStop = True
@@ -355,6 +358,13 @@ def stop_robot():
     lastInterSectionTime = 0
     mbot2.EM_stop("ALL")
     ifFirstDirection = True
+
+def debug_robot():
+    while True:
+        sensors = [mbuild.quad_rgb_sensor.get_color_sta(sensor) for sensor in range(4, 0, -1)]
+        Cprint(sensors)
+        time.sleep(0.2)
+
 
 def start_robot():
     global prevError, integral, isStop, currentStage, lastInterSectionTime, blindTimes, isBlind, blindStartTime, goDirectionStartTime, ifFirstDirection
@@ -385,12 +395,14 @@ def aEvent():
 def bEvent():
     start_robot()
 
-@event.is_press('up')
-def start_sensor_test():
-    global calibrateTime
+@event.is_press('middle')
+def mEvent():
     cyberpi.stop_other()
-    if calibrateTime != 8:
-        calibrateTime += 1
-    else:
-        calibrateTime = 1
-    mbuild.quad_rgb_sensor.adjust(calibrateTime)
+    debug_robot()
+
+@event.is_press('up')
+def upEvent():
+    global currentCalibrateTreshold
+    currentCalibrateTreshold += 10
+    calibrateThreshold(currentCalibrateTreshold)
+    Cprint(currentCalibrateTreshold)
