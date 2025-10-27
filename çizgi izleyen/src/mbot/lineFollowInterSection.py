@@ -2,9 +2,9 @@ import event, time, cyberpi, mbot2, mbuild, sys
 
 # * pid parametreleri
 baseSpeed = 15
-Kp = 18
-Ki = 0.8
-Kd = 6
+Kp = 6.5
+Ki = 0.5
+Kd = 2
 maxIntegral = 50
 prevError = 0
 integral = 0
@@ -47,6 +47,7 @@ lineReactions = {
 }
 interSectionCoolDown = 4 # ? kavşak sonrası bekleme süresi düşük verirsen pid düzelitrken sağ ve sol çizgiye değebileceği için 
 lastInterSectionTime = 0
+manuelIntersectionMode = True
 
 # * genel
 calibrateMode = 1 # ? kalibrasyona göre sensor modu, sensör ışıkları arka planda yanıyorsa 1 çizgide yanıyorsa 0 yap
@@ -232,18 +233,21 @@ def goDirection(direction = "backward"):
             return
 
         elif direction == "right":
-            mbot2.straight(5)
-            mbot2.turn_right(50)
             if ifFirstDirection:
+                mbot2.straight(5)
+                mbot2.turn_right(50)
                 time.sleep(0.5)
                 ifFirstDirection = False
+            else:
+                mbot2.turn_right(40)
         elif direction == "left":
-            mbot2.straight(5)
-            mbot2.turn_left(50)
             if ifFirstDirection:
+                mbot2.straight(5)
+                mbot2.turn_left(50)
                 time.sleep(0.5)
                 ifFirstDirection = False
-
+            else:
+                mbot2.turn_left(40)
         elif direction == "backward":
             if ifFirstDirection and currentStage == stages.DISCHARGE:
                 mbot2.straight(-10)
@@ -286,11 +290,11 @@ def line_follow():
 
     if isStop:  
         return
-    controlInterSection()
-    if isStop:
-        return
+    if manuelIntersectionMode:
+        controlInterSection()
+        if isStop:
+            return
     error = mbuild.quad_rgb_sensor.get_offset_track(1)/100
-
     pid = calculatePID(error)
     left_power = baseSpeed - pid
     right_power = -1 * (baseSpeed + pid)
@@ -336,9 +340,9 @@ def main():
 def calibrateThreshold(threshold = 50):
     try:
         mbuild.quad_rgb_sensor.set_custom_color(
-            r=0,
-            g=0,
-            b=0,
+            r=255,
+            g=255,
+            b=255,
             tolerance=threshold
         )
     except Exception as e:
@@ -360,6 +364,8 @@ def stop_robot():
     ifFirstDirection = True
 
 def debug_robot():
+    mbuild.quad_rgb_sensor.set_led(color = "white")
+
     while True:
         sensors = [mbuild.quad_rgb_sensor.get_color_sta(sensor) for sensor in range(4, 0, -1)]
         Cprint(sensors)
@@ -397,12 +403,31 @@ def bEvent():
 
 @event.is_press('middle')
 def mEvent():
-    cyberpi.stop_other()
-    debug_robot()
+    global Kd, kp
+    Kp = 6.5
+    Kd = 2
+    Cprint("Değerler sıfırlandı")
 
 @event.is_press('up')
 def upEvent():
-    global currentCalibrateTreshold
-    currentCalibrateTreshold += 10
-    calibrateThreshold(currentCalibrateTreshold)
-    Cprint(currentCalibrateTreshold)
+    global Kp
+    Kp += 0.5
+    Cprint("kp : ", Kp)
+
+@event.is_press('down')
+def downEvent():
+    global Kp
+    Kp -= 0.5
+    Cprint("kp : ", Kp)
+
+@event.is_press('right')
+def rightEvent():
+    global Kd
+    Kd += 0.2
+    Cprint("kd : ", Kd)
+
+@event.is_press('left')
+def rightEvent():
+    global Kd
+    Kd -= 0.2
+    Cprint("kd : ", Kd)
