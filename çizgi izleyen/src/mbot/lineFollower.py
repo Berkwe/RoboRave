@@ -134,7 +134,7 @@ def blindDetection():
 
     # ? 1. aşama: 180 derece dönüs
     if elapsed < 2000:
-        goDirection("backward")
+        goDirection("blind")
     elif elapsed < 5000:
         driveMotors(20, 40)  # ? hafif sağa
     elif elapsed < 8000:
@@ -257,13 +257,15 @@ def goDirection(direction):
             else:
                 mbot2.turn_left(40)
 
+        elif direction == "blind":
+            mbot2.turn_right(40)
+
         elif direction == "backward":
             if ifFirstDirection and currentStage == stages.DISCHARGE:
                 mbot2.straight(-10)
                 mbot2.turn_right(50)
                 time.sleep(0.5)
                 ifFirstDirection = False
-
             mbot2.turn_right(40)
 
         sensors = getSensorValues(True, mode=calibrateMode)
@@ -393,14 +395,6 @@ def stop_robot():
     lastInterSectionTime = 0
     mbot2.EM_stop("ALL")
     ifFirstDirection = True
-
-
-def debug_robot():
-    mbuild.quad_rgb_sensor.set_led(color = "white")
-    while True:
-        sensors = [mbuild.quad_rgb_sensor.get_color_sta(sensor) for sensor in range(4, 0, -1)]
-        Cprint(sensors)
-        time.sleep(0.2)
 
 
 def start_robot():
