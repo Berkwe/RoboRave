@@ -1,13 +1,20 @@
 """
 MBOT2 micropython
 author : berkwe
-version : 1.1
+version : 1.2
 
 """
 import event, time, cyberpi, mbot2, mbuild, sys
 
 
 # * Değiştirilebilen parametreler
+
+# * genel değişkenler
+mainLoopDelay = 0.01 # ? her döngüdeki bekleme süresi, koymazsak diğer işlemler için sorun çıkabilir
+debug = False # ? hata ayıklama flagi normalde false yap pid hesaplamasını geçiktirir
+calibrateMode = 1 # ? kalibrasyona göre sensor modu, sensör ışıkları arka planda yanıyorsa 1 çizgide yanıyorsa 0 yap
+sonicSensorThresholdCM = 6.5 # ? ultrasonik sensörün boşaltım noktasını algılaması için mesafe eşiği cm cinsinden
+fineTuneMode = False # ? ince ayar modu açık yapılırsa tuşlarla PID ayarı yapılır
 
 # * Discharge ayarları
 motorPort = "S2" # ? harici dc motor portu
@@ -50,12 +57,6 @@ interSectionsnumSensorReadsFilter = 2 # ? sensorlerin kavşak algılamada kaç k
 interSectionsFilterSleepTime = 0.005 # ? dikkatli ayarla uzun tutarsan numSensorReads*sleepTime dan çok fazla geçikme yaşanabilir. Kısa tutarsan zaten ortalama almanın anlamı kalmaz
 minActiveSensorToInterSections = 2 if baseSpeed >= 19 else 3 # ? bir dönüşün kavşak sayılması için en az kaç tane sensorun aktive olması gerektiğini belirler. bırak kalsın bu ayarlarda.
 
-
-# * genel değişkenler
-mainLoopDelay = 0.01 # ? her döngüdeki bekleme süresi, koymazsak diğer işlemler için sorun çıkabilir
-debug = False # ? hata ayıklama flagi normalde false yap pid hesaplamasını geçiktirir
-calibrateMode = 1 # ? kalibrasyona göre sensor modu, sensör ışıkları arka planda yanıyorsa 1 çizgide yanıyorsa 0 yap
-sonicSensorThresholdCM = 6.5
 
 # ! değiştirilemeyen ayarlar
 
@@ -385,6 +386,8 @@ def DischargeAction(): # ? boşaltım fonksyionu
             mbot2.straight(6, dischargeMoveSpeed)
         goDirection("backward")
     cyberpi.mbot2.write_digital(0, motorPort)
+    if currentStageMode == stageModes.ONEBALL:
+        currentStageMode = stageModes.THREEHUNDBALL
     currentStage = stages.RETURN
 
 
@@ -451,7 +454,7 @@ def stop_robot(): # ? robotu durdurur
 
 
 def start_robot(): # ? robotu başlatır
-    global prevError, integral, isStop, currentStage, lastInterSectionTime, blindTimes, isBlind, blindStartTime, goDirectionStartTime, ifFirstDirection, currentStageMode
+    global prevError, integral, isStop, currentStage, lastInterSectionTime, blindTimes, isBlind, blindStartTime, goDirectionStartTime, ifFirstDirection
     cyberpi.stop_other()
     prevError = 0
     integral = 0
@@ -482,18 +485,29 @@ def bEvent():
 @event.is_press('middle')
 def mEvent():
     global Kmode
-    if Kmode >= 2:
+    if not fineTuneMode:
+        return
+    if Kmode >= 3:
         Kmode = 0
-
     else:
         Kmode += 1
+    
+    if Kmode == 0:
+        Cprint("Kmode : Kp")
+    elif Kmode == 1:
+        Cprint("Kmode : Kd")
+    elif Kmode == 2:
+        Cprint("Kmode : BlindFilter")
+    elif Kmode == 3:
+        Cprint("Kmode : baseSpeed")
 
-    Cprint("mod : ", ("KP modu" if Kmode == 0 else "KD modu"))
 
 
 @event.is_press('up')
 def upEvent():
     global Kp, Kd, blindDetectionFilterTime
+    if not fineTuneMode:
+        return
     if Kmode == 0:
         Kp += 0.5
         Cprint("Kp : ", Kp)
@@ -502,7 +516,7 @@ def upEvent():
         Kd += 0.2
         Cprint("Kd : ", Kd)
 
-    else:
+    elif Kmode == 2:
         blindDetectionFilterTime += 1
         Cprint("BlindFilter : ", blindDetectionFilterTime)
 
@@ -510,6 +524,8 @@ def upEvent():
 @event.is_press('down')
 def downEvent():
     global Kp, Kd, blindDetectionFilterTime
+    if not fineTuneMode:
+        return
     if Kmode == 0:
         Kp -= 0.5
         Cprint("Kp : ", Kp)
@@ -518,14 +534,20 @@ def downEvent():
         Kd -= 0.2
         Cprint("Kd : ", Kd)
 
-    else:
+    elif Kmode == 2:
         blindDetectionFilterTime -= 1
         Cprint("BlindFilter : ", blindDetectionFilterTime)
 
 
 @event.is_press('right')
 def rightEvent():
-    global currentStageMode
+    global currentStageMode, baseSpeed
+    if fineTuneMode and Kmode == 3:
+        baseSpeed += 5
+        Cprint("baseSpeed : ", baseSpeed)
+        return
+    if fineTuneMode: # fineTuneMode açık ama Kmode 3 değilse bir şey yapma
+        return
     if currentStageMode == stageModes.ONEBALL:
         currentStageMode = stageModes.THREEHUNDBALL
     else:
@@ -535,4 +557,7 @@ def rightEvent():
 
 @event.is_press('left')
 def leftEvent():
-    pass
+    global baseSpeed
+    if fineTuneMode and Kmode == 3:
+        baseSpeed -= 5
+        Cprint("baseSpeed : ", baseSpeed)
