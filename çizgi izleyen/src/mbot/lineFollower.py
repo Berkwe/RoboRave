@@ -1,7 +1,8 @@
 """
 MBOT2 micropython
 author : berkwe
-version : 1.2
+version : 1.4 boklu
+değişenler : yarışma formatına uymlu hale getirilidi (düzen ölçeklenebilirlik dinamiklik falan boka sardı), blind statik patternden dinamik patterne geçirildi. bu kadar ne okuyonamk
 
 """
 import event, time, cyberpi, mbot2, mbuild, sys
@@ -13,7 +14,7 @@ import event, time, cyberpi, mbot2, mbuild, sys
 mainLoopDelay = 0.01 # ? her döngüdeki bekleme süresi, koymazsak diğer işlemler için sorun çıkabilir
 debug = False # ? hata ayıklama flagi normalde false yap pid hesaplamasını geçiktirir
 calibrateMode = 1 # ? kalibrasyona göre sensor modu, sensör ışıkları arka planda yanıyorsa 1 çizgide yanıyorsa 0 yap
-sonicSensorThresholdCM = 6.5 # ? ultrasonik sensörün boşaltım noktasını algılaması için mesafe eşiği cm cinsinden
+sonicSensorThresholdCM = 18 # ? ultrasonik sensörün boşaltım noktasını algılaması için mesafe eşiği cm cinsinden
 fineTuneMode = False # ? ince ayar modu açık yapılırsa tuşlarla PID ayarı yapılır
 
 # * Discharge ayarları
@@ -23,8 +24,8 @@ dischargeActionTime_THREEHUNDBALL = 15 # ? kaç kere ileri geri yapacğaını s�
 dischargeActionTime_ONEBALL = 1 # ? aynısının tek topluk hali
 
 
-# * PID parametreleri
-baseSpeed = 25 # ! 15 stabil net, 25 ideal,  30-35 yüksek,  40 ağırlıksız imkansız
+# * PID parametreleri<
+baseSpeed = 21 # ! 15 stabil net, 25 ideal,  30-35 yüksek,  40 ağırlıksız imkansız
 Kp = 27.5 # ! baseSpeed = 15 iken 6-8 arası sonrasında base speede doğru orantılı olarak arttırırlır
 # ! üstünde kutu varsa robot dengesizleşiyor kp yi arttırınca çöülüyor
 Ki = 0 # ! genelde aynı tutulmalı eğer çizgide düzenli olarak çok kayıyorsa azalt veya arttır 
@@ -48,14 +49,21 @@ lineReactionTypes = [ # ? kavşak tepki türleri
 lineReactions = { # ?  kavşaklara verilecek tepkiler
     "rightInterSection": "AUTO",
     "leftInterSection": "AUTO",
-    "TInterSection": "RIGHT"
+    "TInterSection": ["LEFT", "RIGHT"]
+}
+
+lineReactionPatternTimes = {
+    -1 : 0,
+    0 : 0,
+    1 : 0
 }
 
 interSectionCoolDown = 4 # ? kavşak sonrası bekleme süresi düşük verirsen pid düzelitrken sağ ve sol çizgiye değebileceği için
 manuelIntersectionMode = True # ? kapalı yapmak robotun belirli kavşaklara elle girilen tepkilerle değil kendi tepkileriyle gitmesini sağlar
-interSectionsnumSensorReadsFilter = 2 # ? sensorlerin kavşak algılamada kaç kere okunacağı yükseltilirse PID yavaşlayabilir ve hız arttığında kavşak algılamayabilir, düşürülürse kalibrasyonla çözülmüş nadir olan sorun ortaya çıkabilir. 
-interSectionsFilterSleepTime = 0.005 # ? dikkatli ayarla uzun tutarsan numSensorReads*sleepTime dan çok fazla geçikme yaşanabilir. Kısa tutarsan zaten ortalama almanın anlamı kalmaz
+interSectionsnumSensorReadsFilter = 1 # ? sensorlerin kavşak algılamada kaç kere okunacağı yükseltilirse PID yavaşlayabilir ve hız arttığında kavşak algılamayabilir, düşürülürse kalibrasyonla çözülmüş nadir olan sorun ortaya çıkabilir. 
+interSectionsFilterSleepTime = 0 # ? dikkatli ayarla uzun tutarsan numSensorReads*sleepTime dan çok fazla geçikme yaşanabilir. Kısa tutarsan zaten ortalama almanın anlamı kalmaz
 minActiveSensorToInterSections = 2 if baseSpeed >= 19 else 3 # ? bir dönüşün kavşak sayılması için en az kaç tane sensorun aktive olması gerektiğini belirler. bırak kalsın bu ayarlarda.
+
 
 
 # ! değiştirilemeyen ayarlar
@@ -66,12 +74,12 @@ prevError = 0
 integral = 0
 isBlind = False # ? kayıp olup olmadığını tutan flag
 blindTimes = 0 # ? kaç kere çizgiyi kaybettiği (filtreleme için)
-
+mainTime = None
 
 # * kavşak
 lastInterSectionTime = 0 # ? son kavşağın ne zamna olduğunu millis biçiminde tutar
 
-
+nullistan = 0
 # * bölümler 
 class stages:
     DEPARTURE = 0 # ? gidiş
@@ -85,7 +93,7 @@ ifFirstDirection = True
 class stageModes:
     ONEBALL = 0 # ? tek top modu
     THREEHUNDBALL = 1 # ? 300 top modu
-currentStageMode = stageModes.THREEHUNDBALL
+currentStageMode = stageModes.ONEBALL
 
 
 # * blind ayarları
@@ -188,13 +196,12 @@ def blindDetection(): # ? çizgi kaybolduğunda yapılacak standartlar
 
 def reactionInterSections(ınterSectionPattern: str, pattern: int): # ? kavşaklarda verilecek tepkiler
     """Kavşaklara göre verilecek tepkiler"""
-    global lastInterSectionTime
+    global lastInterSectionTime, lineReactionPatternTimes, nullistan
     if isStop:
         return
     reaction = lineReactions.get(ınterSectionPattern, "AUTO") 
-    if reaction not in lineReactionTypes:
-        Cprint("Geçersiz Tepki Girildi Düzeltin : ", reaction)
     Cprint(pattern)
+    Cprint(reaction)
     if reaction == "AUTO":
         if pattern == -1:
             goDirection("left")
@@ -202,7 +209,19 @@ def reactionInterSections(ınterSectionPattern: str, pattern: int): # ? kavşakl
             goDirection("stop")
         elif pattern == 1:
             goDirection("right")
+    elif isinstance(reaction, list):
+        try:
+            if lineReactionPatternTimes[pattern] >= len(reaction):
+                lineReactionPatternTimes[pattern] = 0
+            nullistan = 1
+            goDirection(reaction[lineReactionPatternTimes[pattern]].lower())  # ? return => 
+            lineReactionPatternTimes[pattern] += 1
+        except Exception as e:
+            Cprint("liste kısmında hata var hocam", e)
     else:
+        if currentStage == stages.RETURN and reaction.lower() == "left" and lineReactionPatternTimes[0] == 0: # !! bu baya etkileyebilir tüm akışı tasarım statikleşti..
+            lineReactionPatternTimes[0] += 1
+            nullistan = 1
         goDirection(reaction.lower())
     lastInterSectionTime = time.time()
 
@@ -210,8 +229,7 @@ def reactionInterSections(ınterSectionPattern: str, pattern: int): # ? kavşakl
 def controlInterSection(): # ? kavşak algılama
     """Kavşak kontrolü"""
     global lastInterSectionTime, isStop
-    
-    if lastInterSectionTime != 0 and (time.time() - lastInterSectionTime) < interSectionCoolDown: # ? kavşakdan dönerken sağ veya sol sensorler yanıp sönebilir onun için bekleme süresi
+    if lastInterSectionTime != 0 and (time.time() - lastInterSectionTime) < interSectionCoolDown or (time.time()-mainTime) < interSectionCoolDown: # ? kavşakdan dönerken sağ veya sol sensorler yanıp sönebilir onun için bekleme süresi
         return
     
     if isStop:
@@ -280,7 +298,7 @@ def goDirection(direction): # ? bir yöne gider
             if ifFirstDirection:
                 mbot2.straight(5)
                 mbot2.turn_right(30)
-                time.sleep(0.5)
+                time.sleep(0.75)
                 ifFirstDirection = False
 
             else:
@@ -290,7 +308,7 @@ def goDirection(direction): # ? bir yöne gider
             if ifFirstDirection:
                 mbot2.straight(5)
                 mbot2.turn_left(30)
-                time.sleep(0.5)
+                time.sleep(0.75)
                 ifFirstDirection = False
 
             else:
@@ -303,7 +321,7 @@ def goDirection(direction): # ? bir yöne gider
             if ifFirstDirection and currentStage == stages.DISCHARGE:
                 mbot2.straight(-10)
                 mbot2.turn_left(30)
-                time.sleep(0.5)
+                time.sleep(0.75)
                 ifFirstDirection = False
             else:
                 mbot2.turn_left(25)
@@ -321,56 +339,78 @@ def goDirection(direction): # ? bir yöne gider
     if goDirectionElaspedTime > 8:
         controlBlind = True
 
+# ...existing code...
+
+# ...existing code...
 
 def line_follow(): # ? çizgiyi takip eder
-    """çizgi takibi"""
-    global integral, prevError, blindStartTime, isBlind, blindTimes, lastInterSectionTime
+    """
+    Çizgi takibi: 
+    - Çizgi varsa: Normal PID.
+    - Çizgi yoksa: Süre tutar ve son hataya (prevError) göre tepkiyi zamanla yavaşça arttırır.
+    """
+    global integral, prevError, lastInterSectionTime, blindStartTime
+    
     if isStop:
         return
     
-    if controlBlind:
-        sensors = getSensorValues(mode=calibrateMode)
-        isOnLine = any(sensors) # ? herhangi sensör çizgi üstünde mi?
-        if not isOnLine:
-            if blindTimes > blindDetectionFilterTime:
-                if not isBlind:
-                    integral = 0
-                    prevError = 0
-                    blindStartTime = time.time()
-                    isBlind = True
+    # 1. Sensör kontrolü
+    sensors = getSensorValues(mode=calibrateMode)
+    isOnLine = any(sensors)
 
-                blindDetection()
-                return
-            blindTimes += 1
-        else:
-            blindTimes = 0
-            if isBlind:
-                lastInterSectionTime = 0.1
-                isBlind = False 
-
-    if isStop:  
-        return
-    
-    if manuelIntersectionMode:
+    # 2. Kavşak kontrolü (Sadece çizgi varken)
+    if manuelIntersectionMode and isOnLine:
         controlInterSection()
-
         if isStop:
             return
         
-    error = mbuild.quad_rgb_sensor.get_offset_track(1)/100 # ? mbotun API'sinden hata oranını çeker
-    pid = calculatePID(error) 
+    # 3. PID ve Blind Hesaplama
+    if isOnLine:
+        blindStartTime = 0  # Zamanlayıcıyı sıfırla
+        
+        error = mbuild.quad_rgb_sensor.get_offset_track(1) / 100
+        pid = calculatePID(error)
+    else:
+        # --- ÇİZGİ YOK (BLIND) ---
+        if blindStartTime == 0:
+            blindStartTime = time.time() # İlk kaybolma anı
+        
+        elapsed = time.time() - blindStartTime # Geçen süre (saniye)
+
+        # Temel tepki: Sadece Kp ve son hata (Integral ve Derivative blind modda riskli olabilir)
+        base_reaction = Kp * prevError
+
+        # Agresiflik Çarpanı:
+        # 1.0 ile başlar. Her saniye 0.6 oranında artar.
+        # Örnek: 0.5 sn sonra -> 1.3x güç, 1 sn sonra -> 1.6x güç.
+        increase_factor = 1.0 + (elapsed * 0.4)
+
+        # Güvenlik: Çarpanı maksimum 3.0 ile sınırla (çok aşırı dönmesin)
+        if increase_factor > 2.5:
+            increase_factor = 2.5
+        
+        pid = base_reaction * increase_factor
+
+        # İsteğe bağlı: Integral etkisini de ekle (ama çarpanla değil, sabit)
+        pid += (Ki * integral)
+
+    # 4. Motor Sürüşü
     left_power = baseSpeed - pid
     right_power = -1 * (baseSpeed + pid)
     driveMotors(left_power, right_power)
-    shakeList.append(cyberpi.get_shakeval()) # ? sallanma testi için listeye ekler
+
+    # Loglama
+    shakeList.append(cyberpi.get_shakeval())
 
     if debug:
-        Cprint("E:", error, "I:", integral, "D:", prevError)
+        # Blind durumunda çarpanı da görelim
+        factor_log = 1.0 if isOnLine else (1.0 + (time.time() - blindStartTime) * 0.6)
+        Cprint("Line:", isOnLine, "PID:", pid, "Factor:", factor_log)
 
 
 def DischargeAction(): # ? boşaltım fonksyionu
     """Boşaltım görevi için fonksiyon"""
-    global currentStage, currentStageMode, dischargeActionTime_THREEHUNDBALL, dischargeActionTime_ONEBALL
+    global currentStage, currentStageMode, dischargeActionTime_THREEHUNDBALL, dischargeActionTime_ONEBALL, baseSpeed
     driveMotors(0, 0)
     cyberpi.mbot2.write_digital(1, motorPort)
     if currentStageMode == stageModes.ONEBALL: # ? tek top
@@ -386,22 +426,38 @@ def DischargeAction(): # ? boşaltım fonksyionu
             mbot2.straight(6, dischargeMoveSpeed)
         goDirection("backward")
     cyberpi.mbot2.write_digital(0, motorPort)
-    if currentStageMode == stageModes.ONEBALL:
-        currentStageMode = stageModes.THREEHUNDBALL
     currentStage = stages.RETURN
 
 
 def controlStages(): # ? bölümleri kontrol eder
     """bölüm kontrolü"""
-    global currentStage
+    global currentStage, lineReactions, baseSpeed
 
     if currentStage == stages.DEPARTURE:
+        lineReactions = { # ?  kavşaklara verilecek tepkiler
+        "rightInterSection": "AUTO",
+        "leftInterSection": "AUTO",
+        "TInterSection": "RIGHT"
+    }
         line_follow()
 
     elif currentStage == stages.DISCHARGE:
         DischargeAction()
 
     elif currentStage == stages.RETURN:
+        if nullistan == 1:
+            lineReactions = { # ?  kavşaklara verilecek tepkiler
+            "rightInterSection": "RIGHT",
+            "leftInterSection": "RIGHT",
+            "TInterSection": ["LEFT", "RIGHT"]
+            }
+        else:
+            lineReactions = { # ?  kavşaklara verilecek tepkiler
+                "rightInterSection": "LEFT",
+                "leftInterSection": "LEFT",
+                "TInterSection": ["LEFT", "RIGHT"]
+                }
+        baseSpeed = 21
         line_follow()
 
 
@@ -418,6 +474,7 @@ def main(): # ? ana fonksyion
                 sonicSensorCM = mbuild.ultrasonic2.get()
                 if sonicSensorCM < sonicSensorThresholdCM:
                     Cprint("Sensor okudu")
+                    mbot2.straight(8, dischargeMoveSpeed)
                     currentStage = stages.DISCHARGE
             
             controlStages()
@@ -429,21 +486,25 @@ def main(): # ? ana fonksyion
 
 
 def stop_robot(): # ? robotu durdurur
-    global prevError, integral, ifFirstDirection, lastInterSectionTime, isStop, blindTimes, isBlind, blindStartTime, goDirectionStartTime
+    global prevError, integral, ifFirstDirection, lastInterSectionTime, isStop, blindTimes, isBlind, blindStartTime, goDirectionStartTime, lineReactionPatternTimes, nullistan
     isStop = True
     cyberpi.stop_other()
     Cprint("Robot durdu")
     cyberpi.mbot2.write_digital(0, motorPort)
-    cyberpi
     if len(shakeList) > 0:
         shakeAvargeVal = sum(shakeList)/len(shakeList)
-        cyberpi.console.clear()
         Cprint("shakeVal : ", shakeAvargeVal)
     else:
         Cprint("Shake verisi toplanmadi.")
     shakeList.clear()
+    lineReactionPatternTimes = {
+        -1 : 0,
+        0 : 0,
+        1 : 0
+    }
     prevError = 0
     integral = 0
+    nullistan = 0
     blindTimes = 0
     isBlind = False
     blindStartTime = 0
@@ -454,7 +515,7 @@ def stop_robot(): # ? robotu durdurur
 
 
 def start_robot(): # ? robotu başlatır
-    global prevError, integral, isStop, currentStage, lastInterSectionTime, blindTimes, isBlind, blindStartTime, goDirectionStartTime, ifFirstDirection
+    global prevError, integral, isStop, currentStage, lastInterSectionTime, blindTimes, isBlind, blindStartTime, goDirectionStartTime, ifFirstDirection, mainTime
     cyberpi.stop_other()
     prevError = 0
     integral = 0
@@ -467,8 +528,10 @@ def start_robot(): # ? robotu başlatır
     blindStartTime = 0
     goDirectionStartTime = 0
     ifFirstDirection = True
-    
+    mainTime = time.time()
     Cprint("Robot basladi")
+    mbot2.straight(12, dischargeMoveSpeed)
+
     main()
 
 
@@ -487,7 +550,7 @@ def mEvent():
     global Kmode
     if not fineTuneMode:
         return
-    if Kmode >= 3:
+    if Kmode >= 5:
         Kmode = 0
     else:
         Kmode += 1
@@ -500,43 +563,62 @@ def mEvent():
         Cprint("Kmode : BlindFilter")
     elif Kmode == 3:
         Cprint("Kmode : baseSpeed")
-
-
+    elif Kmode == 4:
+        Cprint("Kmode : Ki")
+    elif Kmode == 5:
+        Cprint("Kmode : top ayarı")
+    
 
 @event.is_press('up')
 def upEvent():
-    global Kp, Kd, blindDetectionFilterTime
+    global Kp, Kd, blindDetectionFilterTime, Ki, baseSpeed, currentStageMode
     if not fineTuneMode:
         return
     if Kmode == 0:
-        Kp += 0.5
+        Kp += 0.05
         Cprint("Kp : ", Kp)
 
     elif Kmode == 1:
-        Kd += 0.2
+        Kd += 0.05
         Cprint("Kd : ", Kd)
 
     elif Kmode == 2:
         blindDetectionFilterTime += 1
         Cprint("BlindFilter : ", blindDetectionFilterTime)
+    
+    elif Kmode == 4:
+        Ki += 0.05
+        Cprint("Ki : ", Ki)
+    elif Kmode == 5:
+        if currentStageMode == stageModes.ONEBALL:
+            currentStageMode = stageModes.THREEHUNDBALL
+            baseSpeed = 25
+        else:
+            currentStageMode = stageModes.ONEBALL
+            baseSpeed = 22
+        Cprint("mod : ", "tek top" if currentStageMode == stageModes.ONEBALL else "çok top")
+            
 
 
 @event.is_press('down')
 def downEvent():
-    global Kp, Kd, blindDetectionFilterTime
+    global Kp, Kd, blindDetectionFilterTime, Ki
     if not fineTuneMode:
         return
     if Kmode == 0:
-        Kp -= 0.5
+        Kp -= 0.05
         Cprint("Kp : ", Kp)
 
     elif Kmode == 1:
-        Kd -= 0.2
+        Kd -= 0.05
         Cprint("Kd : ", Kd)
 
     elif Kmode == 2:
         blindDetectionFilterTime -= 1
         Cprint("BlindFilter : ", blindDetectionFilterTime)
+    elif Kmode == 4:
+        Ki -= 0.05
+        Cprint("Ki : ", Ki)
 
 
 @event.is_press('right')
@@ -550,8 +632,10 @@ def rightEvent():
         return
     if currentStageMode == stageModes.ONEBALL:
         currentStageMode = stageModes.THREEHUNDBALL
+        baseSpeed = 24
     else:
         currentStageMode = stageModes.ONEBALL
+        baseSpeed = 23
     Cprint("mod : ", "tek top" if currentStageMode == stageModes.ONEBALL else "çok top")
 
 
@@ -561,3 +645,4 @@ def leftEvent():
     if fineTuneMode and Kmode == 3:
         baseSpeed -= 5
         Cprint("baseSpeed : ", baseSpeed)
+
