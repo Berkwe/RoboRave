@@ -3,5 +3,5 @@
 ### Yarışma sayfası  
 https://www.roborave.de/en  
 
-## Kaçıncıyız?  
+## Sıralama
 **https://rr-turnierverwaltungsplattform.pages.dev/challenge/line-following**  
